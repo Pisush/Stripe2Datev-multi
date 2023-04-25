@@ -15,6 +15,7 @@ To activate in your current shell:
 ```
 . venv/bin/activate
 pip install -r requirements.txt
+export STRIPE_API_KEY=sk...
 ```
 
 ## Example
