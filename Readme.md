@@ -1,5 +1,6 @@
 # Stripe DATEV Exporter
 
+Took https://github.com/jonaswitt/stripe-datev-exporter and changed it using GPT-4 to drop the need for Customer ID, and other adjustments.
 
 ## Environment
 
@@ -13,4 +14,11 @@ To activate in your current shell:
 
 ```
 . venv/bin/activate
+pip install -r requirements.txt
 ```
+
+## Example
+```
+python stripe-datev-cli.py download 2023 1
+```
+
