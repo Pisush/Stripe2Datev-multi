@@ -65,7 +65,7 @@ class StripeDatevCli(object):
           fromTime = stripe_datev.config.accounting_tz.localize(datetime(year, 1, 1, 0, 0, 0, 0))
           toTime = fromTime + datedelta.YEAR
         print("Retrieving data between {} and {}".format(fromTime.strftime("%Y-%m-%d"), (toTime - timedelta(0, 1)).strftime("%Y-%m-%d")))
-        thisMonth = fromTime.astimezone(stripe_datev.config.accounting_tz).strftime("%Y-%m")
+        thisMonth = fromTime.astimezone(stripe_datev.config.accounting_tz).strftime("%Y-%m") 
 
         invoices = list(reversed(list(stripe_datev.invoices.listFinalizedInvoices(fromTime, toTime))))
         print("Retrieved {} invoice(s), total {} EUR".format(len(invoices), sum([decimal.Decimal(i.total) / 100 for i in invoices])))
@@ -197,10 +197,10 @@ class StripeDatevCli(object):
       stripe_datev.customer.validate_customers()
 
     def fill_account_numbers(self, argv):
-      stripe_datev.customer.fill_account_numbers()
+      pass
 
     def list_accounts(self, argv):
-      stripe_datev.customer.list_account_numbers(argv[0] if len(argv) > 0 else None)
+      pass
 
     def opos(self, argv):
       if len(argv) > 0:

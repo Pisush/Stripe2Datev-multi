@@ -33,13 +33,13 @@ def getCheckoutSessionViaPaymentIntentCached(id):
   return session
 
 def getChargeDescription(charge):
-  if not charge.description and charge.payment_intent:
-    try:
-      session = getCheckoutSessionViaPaymentIntentCached(charge.payment_intent)
-      return ", ".join(map(lambda li: li.description, session.line_items.data))
-    except:
-      pass
-  return charge.description
+    if not charge.description and charge.payment_intent:
+        try:
+            session = getCheckoutSessionViaPaymentIntentCached(charge.payment_intent)
+            return ", ".join(map(lambda li: li.description, session.line_items.data))
+        except:
+            pass
+    return charge.description or ""
 
 def getChargeRecognitionRange(charge):
   desc = getChargeDescription(charge)
@@ -52,60 +52,61 @@ def getChargeRecognitionRange(charge):
     return created, created
 
 def createRevenueItems(charges):
-  revenue_items = []
-  for charge in charges:
-    if charge.refunded:
-      if charge.refunds.data[0].amount == charge.amount:
-        print("Skipping fully refunded charge", charge.id)
-        continue
-      else:
-        raise NotImplementedError("Handling of partially refunded charges is not implemented yet")
-    if "in_" in charge.description:
-      print("Skipping charge referencing invoice", charge.id, charge.description)
-      continue
+    revenue_items = []
+    for charge in charges:
+        if charge.refunded:
+            if charge.refunds.data[0].amount == charge.amount:
+                print("Skipping fully refunded charge", charge.id)
+                continue
+            else:
+                raise NotImplementedError("Handling of partially refunded charges is not implemented yet")
+        
+        if "in_" in getChargeDescription(charge):
+            print("Skipping charge referencing invoice", charge.id, charge.description)
+            continue
 
-    cus = customer.retrieveCustomer(charge.customer)
-    session = getCheckoutSessionViaPaymentIntentCached(charge.payment_intent)
+        cus = customer.retrieveCustomer(charge.customer)
+        session = getCheckoutSessionViaPaymentIntentCached(charge.payment_intent)
 
-    accounting_props = customer.getAccountingProps(cus, checkout_session=session)
-    if charge.receipt_number:
-      text = "Receipt {}".format(charge.receipt_number)
-    else:
-      text = "Charge {}".format(charge.id)
+        accounting_props = customer.getAccountingProps(cus, checkout_session=session)
+        if charge.receipt_number:
+            text = "Receipt {}".format(charge.receipt_number)
+        else:
+            text = "Charge {}".format(charge.id)
 
-    description = getChargeDescription(charge)
-    if description:
-      text += " / {}".format(description)
+        description = getChargeDescription(charge)
+        if description:
+            text += " / {}".format(description)
 
-    created = datetime.fromtimestamp(charge.created, timezone.utc)
-    start, end = getChargeRecognitionRange(charge)
+        created = datetime.fromtimestamp(charge.created, timezone.utc)
+        start, end = getChargeRecognitionRange(charge)
 
-    charge_amount = decimal.Decimal(charge.amount) / 100
-    tax_amount = decimal.Decimal(session.total_details.amount_tax) / 100 if session else None
-    net_amount = charge_amount - tax_amount if tax_amount is not None else charge_amount
+        charge_amount = decimal.Decimal(charge.amount) / 100
+        tax_amount = decimal.Decimal(session.total_details.amount_tax) / 100 if session else None
+        net_amount = charge_amount - tax_amount if tax_amount is not None else charge_amount
 
-    tax_percentage = None if tax_amount is None else decimal.Decimal(tax_amount) / decimal.Decimal(net_amount) * 100
+        tax_percentage = None if tax_amount is None else decimal.Decimal(tax_amount) / decimal.Decimal(net_amount) * 100
 
-    revenue_items.append({
-      "id": charge.id,
-      "number": charge.receipt_number,
-      "created": created,
-      "amount_net": net_amount,
-      "accounting_props": accounting_props,
-      "customer": cus,
-      "amount_with_tax": charge_amount,
-      "tax_percentage": tax_percentage,
-      "text": text,
-      "line_items": [{
-        "recognition_start": start,
-        "recognition_end": end,
-        "amount_net": net_amount,
-        "text": text,
-        "amount_with_tax": charge_amount
-      }]
-    })
+        revenue_items.append({
+            "id": charge.id,
+            "number": charge.receipt_number,
+            "created": created,
+            "amount_net": net_amount,
+            "accounting_props": accounting_props,
+            "customer": cus,
+            "amount_with_tax": charge_amount,
+            "tax_percentage": tax_percentage,
+            "text": text,
+            "line_items": [{
+                "recognition_start": start,
+                "recognition_end": end,
+                "amount_net": net_amount,
+                "text": text,
+                "amount_with_tax": charge_amount
+            }]
+        })
 
-  return revenue_items
+    return revenue_items
 
 def createAccountingRecords(charges):
   records = []
@@ -132,7 +133,7 @@ def createAccountingRecords(charges):
       "Soll/Haben-Kennzeichen": "S",
       "WKZ Umsatz": "EUR",
       "Konto": "1201",
-      "Gegenkonto (ohne BU-Schlüssel)": acc_props["customer_account"],
+      "Gegenkonto (ohne BU-Schlüssel)": "None",
       "Buchungstext": "Stripe Payment ({})".format(charge.id),
       "Belegfeld 1": number,
     })
@@ -158,7 +159,7 @@ def createAccountingRecords(charges):
         "Soll/Haben-Kennzeichen": "H",
         "WKZ Umsatz": "EUR",
         "Konto": "1201",
-        "Gegenkonto (ohne BU-Schlüssel)": acc_props["customer_account"],
+        "Gegenkonto (ohne BU-Schlüssel)": "None",
         "Buchungstext": "Stripe Payment Refund ({})".format(charge.id),
         "Belegfeld 1": number,
       })

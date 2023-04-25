@@ -74,14 +74,7 @@ def getAccountingProps(customer, invoice=None, checkout_session=None):
   props = {
     "vat_region": "World",
   }
-
-  if (invoice is None or datetime.fromtimestamp(invoice.status_transitions.finalized_at, timezone.utc) >= datetime(2022, 1, 1, 0, 0).astimezone(config.accounting_tz)):
-    if not customer.metadata.get("accountNumber", None):
-      raise Exception("Expected 'accountNumber' in metadata")
-    props["customer_account"] = customer.metadata["accountNumber"]
-  else:
-    props["customer_account"] = "10001"
-
+  
   address = customer.address or customer.shipping.address
   country = address.country
 
@@ -155,9 +148,6 @@ def getAccountingProps(customer, invoice=None, checkout_session=None):
 def getRevenueAccount(customer, invoice=None, checkout_session=None):
   return getAccountingProps(customer, invoice=invoice, checkout_session=checkout_session)["revenue_account"]
 
-def getCustomerAccount(customer, invoice=None, checkout_session=None):
-  return getAccountingProps(customer, invoice=invoice, checkout_session=checkout_session)["customer_account"]
-
 def getDatevTaxKey(customer, invoice=None, checkout_session=None):
   return getAccountingProps(customer, invoice=invoice, checkout_session=checkout_session)["datev_tax_key"]
 
@@ -176,41 +166,5 @@ def validate_customers():
 
   print("Validated {} customers".format(customer_count))
 
-def fill_account_numbers():
-  highest_account_number = None
-  fill_customers = []
-  for customer in stripe.Customer.list().auto_paging_iter():
-    if "accountNumber" in customer.metadata:
-      highest_account_number = int(customer.metadata["accountNumber"])
-      break
-    fill_customers.append(customer)
-
-  if highest_account_number is None:
-    highest_account_number = 10100 - 1
-
-  print("{} customers without account number, highest number is {}".format(len(fill_customers), highest_account_number))
-
-  for customer in reversed(fill_customers):
-    # print(customer.id, customer.metadata)
-
-    highest_account_number += 1
-    metadata_new = {
-      "accountNumber": str(highest_account_number)
-    }
-
-    for old_key in ["subscribedNetPrice", "subscribedProduct", "subscribedProductName", "subscribedTaxRate", "subscribedTotal"]:
-      if old_key in customer.metadata:
-        metadata_new[old_key] = ""
-
-    # print("Update", metadata_new)
-    stripe.Customer.modify(customer.id, metadata=metadata_new)
-
-    print(customer.id, highest_account_number)
-
 def list_account_numbers(file_path):
-  customer_it = stripe.Customer.list(expand=["data.tax_ids"]).auto_paging_iter()
-  if file_path is None:
-    output.printAccounts(sys.stdout, customer_it)
-  else:
-    with open(file_path, "w", encoding="latin-1", errors="replace") as fp:
-      output.printAccounts(fp, customer_it)
+  pass

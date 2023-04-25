@@ -251,7 +251,7 @@ def printAccounts(textFileHandle, customers):
     vat_id = acc_props["vat_id"]
 
     record = {
-      "Konto": acc_props["customer_account"],
+      "Konto": "None",
       "Name (Adressattyp Unternehmen)": customer.getCustomerName(cus),
       "Adressattyp": "2",
       "EU-Land": vat_id[:2] if vat_id is not None else "",
