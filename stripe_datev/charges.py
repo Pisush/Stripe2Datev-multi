@@ -60,9 +60,13 @@ def createRevenueItems(charges):
                 continue
             else:
                 raise NotImplementedError("Handling of partially refunded charges is not implemented yet")
-        
+
         if "in_" in getChargeDescription(charge):
             print("Skipping charge referencing invoice", charge.id, charge.description)
+            continue
+
+        if charge.customer == None:
+            print("Skipping charge with empty customer field/guest account", charge.id)
             continue
 
         cus = customer.retrieveCustomer(charge.customer)
@@ -112,6 +116,8 @@ def createAccountingRecords(charges):
   records = []
 
   for charge in charges:
+    if charge.customer == None:
+       continue
     acc_props = customer.getAccountingProps(customer.retrieveCustomer(charge.customer))
     created = datetime.fromtimestamp(charge.created, timezone.utc).astimezone(config.accounting_tz)
 
