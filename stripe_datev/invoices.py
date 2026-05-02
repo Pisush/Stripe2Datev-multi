@@ -461,6 +461,40 @@ def to_recognized_month_csv2(revenue_items):
 
   return csv.lines_to_csv(lines)
 
+def listCancelledInvoicesSince(fromTime):
+  """Find invoices voided, marked uncollectible, or credited since fromTime."""
+  seen_ids = set()
+
+  # Credit notes created since fromTime
+  for cn in stripe.CreditNote.list(
+    created={"gte": int(fromTime.timestamp())}
+  ).auto_paging_iter():
+    inv_id = cn.invoice if isinstance(cn.invoice, str) else cn.invoice.id
+    if inv_id not in seen_ids:
+      seen_ids.add(inv_id)
+      yield retrieveInvoice(inv_id)
+
+  # Voided invoices via events
+  for event in stripe.Event.list(
+    type="invoice.voided",
+    created={"gte": int(fromTime.timestamp())}
+  ).auto_paging_iter():
+    inv_id = event.data.object.id
+    if inv_id not in seen_ids:
+      seen_ids.add(inv_id)
+      yield retrieveInvoice(inv_id)
+
+  # Uncollectible invoices via events
+  for event in stripe.Event.list(
+    type="invoice.marked_uncollectible",
+    created={"gte": int(fromTime.timestamp())}
+  ).auto_paging_iter():
+    inv_id = event.data.object.id
+    if inv_id not in seen_ids:
+      seen_ids.add(inv_id)
+      yield retrieveInvoice(inv_id)
+
+
 def roundCentsDown(dec):
   return math.floor(dec * 100) / 100
 

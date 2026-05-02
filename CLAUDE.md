@@ -15,7 +15,7 @@ Fetches one month (or full year) of Stripe data and writes structured outputs:
 | `out/datev/EXTF_YYYY-MM_Payouts.csv` | DATEV booking records for Stripe payouts to bank |
 | `out/datev/EXTF_YYYY-MM_Contributions.csv` | DATEV booking records for Stripe contributions |
 | `out/pdf/*.pdf` | Invoice PDFs downloaded from Stripe |
-| `out/pdf/*.html` | Charge receipt HTML pages (currently downloaded but not needed) |
+| `out/pdf/*_credit_note.pdf` | Credit note PDFs for cancelled/refunded invoices (since mode) |
 
 When using a test API key (`sk_test_...`) all output goes under `out/test/`.
 
@@ -38,6 +38,13 @@ python stripe-datev-cli.py download 2024 1
 # Export full year (month = 0)
 python stripe-datev-cli.py download 2024 0
 
+# Incremental export: everything since a specific date
+# Also detects voided/credited invoices from earlier months and emits only the reversal entries
+python stripe-datev-cli.py download --since 2024-03-15
+
+# Incremental export since the last run (reads out/.last_download)
+python stripe-datev-cli.py download --since last
+
 # List unpaid invoices (open outstanding)
 python stripe-datev-cli.py opos
 
@@ -47,6 +54,23 @@ python stripe-datev-cli.py opos 2024 12 31
 # Check customer tax/VAT configuration
 python stripe-datev-cli.py validate_customers
 ```
+
+### Incremental / `--since` mode
+
+Every successful `download` run writes the run timestamp to `out/.last_download`.
+`--since last` reads that file so you only fetch what changed since the previous run.
+
+In `--since` mode the tool also scans for **cancelled invoices** — invoices originally
+from any earlier month that were voided, marked uncollectible, or had a credit note
+issued in the requested window. For each such invoice it:
+
+1. Emits only the reversal/Storno DATEV records (dated at the cancellation time,
+   so they land in the correct accounting month — never re-books the original).
+2. Releases any open pRAP deferral entries that belong to that invoice.
+3. Downloads the credit note PDF alongside the regular invoice PDFs.
+
+Output files in since mode use a `since-YYYY-MM-DD` suffix instead of a month number
+(e.g. `overview-since-2024-03-15.csv`) so they don't overwrite full-month exports.
 
 ## Configuration
 
@@ -60,7 +84,7 @@ python stripe-datev-cli.py validate_customers
 ## Module overview
 
 - **stripe-datev-cli.py** — Entry point; orchestrates download flow and writes all files
-- **stripe_datev/invoices.py** — Fetches finalized invoices, builds revenue items, handles voids/credits/pRAP
+- **stripe_datev/invoices.py** — Fetches finalized invoices, builds revenue items, handles voids/credits/pRAP; `listCancelledInvoicesSince()` finds cancellations via Events + CreditNote APIs
 - **stripe_datev/charges.py** — Fetches direct (non-invoice) charges, skips fully refunded ones
 - **stripe_datev/payouts.py** — Fetches payouts and balance contributions
 - **stripe_datev/customer.py** — Resolves customer country/VAT status → DATEV revenue account (8400/8336/8338)
