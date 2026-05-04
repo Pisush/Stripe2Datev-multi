@@ -50,22 +50,46 @@ class StripeDatevCli(object):
 
     def download(self, argv):
         parser = argparse.ArgumentParser(prog="stripe-datev-cli.py download")
-        parser.add_argument('year', type=int, help='year to download data for')
-        parser.add_argument('month', type=int, help='month to download data for')
+        parser.add_argument('year', type=int, nargs='?', help='year to download data for')
+        parser.add_argument('month', type=int, nargs='?', help='month to download (0 = full year)')
+        parser.add_argument('--since', type=str, metavar='DATE',
+            help='incremental mode: download changes since DATE (YYYY-MM-DD) or "last"')
 
         args = parser.parse_args(argv)
 
-        year = int(args.year)
-        month = int(args.month)
+        now = datetime.now(tz=stripe_datev.config.accounting_tz)
+        since_mode = False
+        last_download_file = os.path.join(out_dir, '.last_download')
 
-        if month > 0:
-          fromTime = stripe_datev.config.accounting_tz.localize(datetime(year, month, 1, 0, 0, 0, 0))
-          toTime = fromTime + datedelta.MONTH
+        if args.since is not None:
+            since_mode = True
+            if args.since == 'last':
+                if not os.path.exists(last_download_file):
+                    print("No previous download timestamp found. Run a full month download first, or specify a date with --since YYYY-MM-DD")
+                    sys.exit(1)
+                with open(last_download_file) as f:
+                    fromTime = datetime.fromisoformat(f.read().strip())
+            else:
+                fromTime = stripe_datev.config.accounting_tz.localize(
+                    datetime.strptime(args.since, "%Y-%m-%d")
+                )
+            toTime = now
+            thisMonth = now.strftime("%Y-%m")
+            print("Retrieving data since {} (incremental)".format(fromTime.strftime("%Y-%m-%d %H:%M")))
+        elif args.year is not None and args.month is not None:
+            year = args.year
+            month = args.month
+            if month > 0:
+                fromTime = stripe_datev.config.accounting_tz.localize(datetime(year, month, 1, 0, 0, 0, 0))
+                toTime = fromTime + datedelta.MONTH
+            else:
+                fromTime = stripe_datev.config.accounting_tz.localize(datetime(year, 1, 1, 0, 0, 0, 0))
+                toTime = fromTime + datedelta.YEAR
+            thisMonth = fromTime.strftime("%Y-%m")
+            print("Retrieving data between {} and {}".format(fromTime.strftime("%Y-%m-%d"), (toTime - timedelta(0, 1)).strftime("%Y-%m-%d")))
         else:
-          fromTime = stripe_datev.config.accounting_tz.localize(datetime(year, 1, 1, 0, 0, 0, 0))
-          toTime = fromTime + datedelta.YEAR
-        print("Retrieving data between {} and {}".format(fromTime.strftime("%Y-%m-%d"), (toTime - timedelta(0, 1)).strftime("%Y-%m-%d")))
-        thisMonth = fromTime.astimezone(stripe_datev.config.accounting_tz).strftime("%Y-%m") 
+            parser.error("Specify YEAR MONTH or --since DATE")
+            return
 
         invoices = list(reversed(list(stripe_datev.invoices.listFinalizedInvoices(fromTime, toTime))))
         print("Retrieved {} invoice(s), total {} EUR".format(len(invoices), sum([decimal.Decimal(i.total) / 100 for i in invoices])))
@@ -80,118 +104,165 @@ class StripeDatevCli(object):
 
         overview_dir = os.path.join(out_dir, "overview")
         if not os.path.exists(overview_dir):
-          os.mkdir(overview_dir)
+            os.mkdir(overview_dir)
 
-        with open(os.path.join(overview_dir, "overview-{:04d}-{:02d}.csv".format(year, month)), "w", encoding="utf-8") as fp:
-          fp.write(stripe_datev.invoices.to_csv(invoices))
-          print("Wrote {} invoices      to {}".format(str(len(invoices)).rjust(4, " "), os.path.relpath(fp.name, os.getcwd())))
+        if since_mode:
+            overview_name = "overview-since-{}.csv".format(fromTime.strftime("%Y-%m-%d"))
+        else:
+            overview_name = "overview-{:04d}-{:02d}.csv".format(year, month)
+
+        with open(os.path.join(overview_dir, overview_name), "w", encoding="utf-8") as fp:
+            fp.write(stripe_datev.invoices.to_csv(invoices))
+            print("Wrote {} invoices      to {}".format(str(len(invoices)).rjust(4, " "), os.path.relpath(fp.name, os.getcwd())))
 
         monthly_recognition_dir = os.path.join(out_dir, "monthly_recognition")
         if not os.path.exists(monthly_recognition_dir):
-          os.mkdir(monthly_recognition_dir)
+            os.mkdir(monthly_recognition_dir)
 
-        with open(os.path.join(monthly_recognition_dir, "monthly_recognition-{}.csv".format(thisMonth)), "w", encoding="utf-8") as fp:
-          fp.write(stripe_datev.invoices.to_recognized_month_csv2(revenue_items))
-          print("Wrote {} revenue items to {}".format(str(len(revenue_items)).rjust(4, " "), os.path.relpath(fp.name, os.getcwd())))
+        if since_mode:
+            recognition_name = "monthly_recognition-since-{}.csv".format(fromTime.strftime("%Y-%m-%d"))
+        else:
+            recognition_name = "monthly_recognition-{}.csv".format(thisMonth)
+
+        with open(os.path.join(monthly_recognition_dir, recognition_name), "w", encoding="utf-8") as fp:
+            fp.write(stripe_datev.invoices.to_recognized_month_csv2(revenue_items))
+            print("Wrote {} revenue items to {}".format(str(len(revenue_items)).rjust(4, " "), os.path.relpath(fp.name, os.getcwd())))
 
         datevDir = os.path.join(out_dir, 'datev')
         if not os.path.exists(datevDir):
-          os.mkdir(datevDir)
+            os.mkdir(datevDir)
 
-        # Datev Revenue
+        # Revenue accounting records
 
         records = []
         for revenue_item in revenue_items:
-          records += stripe_datev.invoices.createAccountingRecords(revenue_item)
+            records += stripe_datev.invoices.createAccountingRecords(revenue_item)
 
         records_by_month = {}
         for record in records:
-          month = record["date"].strftime("%Y-%m")
-          records_by_month[month] = records_by_month.get(month, []) + [record]
+            rec_month = record["date"].strftime("%Y-%m")
+            records_by_month[rec_month] = records_by_month.get(rec_month, []) + [record]
 
-        for month, records in records_by_month.items():
-          if month == thisMonth:
-            name = "EXTF_{}_Revenue.csv".format(thisMonth)
-          else:
-            name = "EXTF_{}_Revenue_From_{}.csv".format(month, thisMonth)
-          stripe_datev.output.writeRecords(os.path.join(datevDir, name), records, bezeichung="Stripe Revenue {} from {}".format(month, thisMonth))
-
-        # Datev charges
+        # Charge accounting records
 
         charge_records = stripe_datev.charges.createAccountingRecords(charges)
 
         charges_by_month = {}
         for record in charge_records:
-          month = record["date"].strftime("%Y-%m")
-          charges_by_month[month] = charges_by_month.get(month, []) + [record]
+            rec_month = record["date"].strftime("%Y-%m")
+            charges_by_month[rec_month] = charges_by_month.get(rec_month, []) + [record]
 
-        for month, records in charges_by_month.items():
-          if month == thisMonth:
-            name = "EXTF_{}_Charges.csv".format(thisMonth)
-          else:
-            name = "EXTF_{}_Charges_From_{}.csv".format(month, thisMonth)
-          stripe_datev.output.writeRecords(os.path.join(datevDir, name), records, bezeichung="Stripe Charges/Fees {} from {}".format(month, thisMonth))
-
-        # Datev payouts
+        # Payouts and contributions
 
         payoutObjects = list(stripe_datev.payouts.listPayouts(fromTime, toTime))
         print("Retrieved {} payout(s), total {} EUR".format(len(payoutObjects), sum([r["amount"] for r in payoutObjects])))
 
         payout_records = stripe_datev.payouts.createAccountingRecords(payoutObjects)
-        stripe_datev.output.writeRecords(os.path.join(datevDir, "EXTF_{}_Payouts.csv".format(thisMonth)), payout_records, bezeichung="Stripe Payouts {}".format(thisMonth))
 
         balance_transactions = list(stripe.BalanceTransaction.list(
-          created={
-            "lt": int(toTime.timestamp()),
-            "gte": int(fromTime.timestamp()),
-          },
-          type="contribution",
+            created={
+                "lt": int(toTime.timestamp()),
+                "gte": int(fromTime.timestamp()),
+            },
+            type="contribution",
         ).auto_paging_iter())
         print("Retrieved {} contribution(s), total {} EUR".format(len(balance_transactions), sum([-decimal.Decimal(b["amount"]) / 100 for b in balance_transactions])))
 
         contribution_records = stripe_datev.payouts.createAccountingRecordsContributions(balance_transactions)
-        stripe_datev.output.writeRecords(os.path.join(datevDir, "EXTF_{}_Contributions.csv".format(thisMonth)), contribution_records, bezeichung="Stripe Contributions {}".format(thisMonth))
 
-        # PDF
+        # Cancelled invoices (since mode only)
+        # Finds invoices voided, marked uncollectible, or credited since fromTime that are
+        # NOT already included in the regular fetch above (those were finalized after fromTime).
+        # Only emits records dated >= fromTime to avoid re-booking the original invoice.
+
+        cancelled_invoices = []
+        if since_mode:
+            already_fetched = {inv.id for inv in invoices}
+            cancelled_invoices = [
+                inv for inv in stripe_datev.invoices.listCancelledInvoicesSince(fromTime)
+                if inv.id not in already_fetched
+            ]
+            print("Found {} cancelled/voided/credited invoice(s) since {}".format(
+                len(cancelled_invoices), fromTime.strftime("%Y-%m-%d")))
+
+            if cancelled_invoices:
+                cancelled_items = stripe_datev.invoices.createRevenueItems(cancelled_invoices)
+                from_ts = fromTime.timestamp()
+                for item in cancelled_items:
+                    for record in stripe_datev.invoices.createAccountingRecords(item):
+                        if record["date"].timestamp() >= from_ts:
+                            rec_month = record["date"].strftime("%Y-%m")
+                            records_by_month[rec_month] = records_by_month.get(rec_month, []) + [record]
+
+        # Write DATEV files
+
+        for rec_month, month_records in records_by_month.items():
+            if rec_month == thisMonth:
+                name = "EXTF_{}_Revenue.csv".format(thisMonth)
+            else:
+                name = "EXTF_{}_Revenue_From_{}.csv".format(rec_month, thisMonth)
+            stripe_datev.output.writeRecords(os.path.join(datevDir, name), month_records, bezeichung="Stripe Revenue {} from {}".format(rec_month, thisMonth))
+
+        for rec_month, month_records in charges_by_month.items():
+            if rec_month == thisMonth:
+                name = "EXTF_{}_Charges.csv".format(thisMonth)
+            else:
+                name = "EXTF_{}_Charges_From_{}.csv".format(rec_month, thisMonth)
+            stripe_datev.output.writeRecords(os.path.join(datevDir, name), month_records, bezeichung="Stripe Charges/Fees {} from {}".format(rec_month, thisMonth))
+
+        stripe_datev.output.writeRecords(
+            os.path.join(datevDir, "EXTF_{}_Payouts.csv".format(thisMonth)),
+            payout_records,
+            bezeichung="Stripe Payouts {}".format(thisMonth)
+        )
+        stripe_datev.output.writeRecords(
+            os.path.join(datevDir, "EXTF_{}_Contributions.csv".format(thisMonth)),
+            contribution_records,
+            bezeichung="Stripe Contributions {}".format(thisMonth)
+        )
+
+        # Invoice PDFs
 
         pdfDir = os.path.join(out_dir, 'pdf')
         if not os.path.exists(pdfDir):
-          os.mkdir(pdfDir)
+            os.mkdir(pdfDir)
 
         for invoice in invoices:
-          pdfLink = invoice.invoice_pdf
-          finalized_date = datetime.fromtimestamp(invoice.status_transitions.finalized_at, timezone.utc).astimezone(stripe_datev.config.accounting_tz)
-          invNo = invoice.number
+            pdfLink = invoice.invoice_pdf
+            finalized_date = datetime.fromtimestamp(invoice.status_transitions.finalized_at, timezone.utc).astimezone(stripe_datev.config.accounting_tz)
+            fileName = "{} {}.pdf".format(finalized_date.strftime("%Y-%m-%d"), invoice.number)
+            filePath = os.path.join(pdfDir, fileName)
+            if os.path.exists(filePath):
+                continue
+            print("Downloading {} to {}".format(pdfLink, filePath))
+            r = requests.get(pdfLink)
+            if r.status_code != 200:
+                print("HTTP status {}".format(r.status_code))
+                continue
+            with open(filePath, "wb") as fp:
+                fp.write(r.content)
 
-          fileName = "{} {}.pdf".format(finalized_date.strftime("%Y-%m-%d"), invNo)
-          filePath = os.path.join(pdfDir, fileName)
-          if os.path.exists(filePath):
-            # print("{} exists, skipping".format(filePath))
-            continue
+        # Credit note PDFs for cancelled invoices
 
-          print("Downloading {} to {}".format(pdfLink, filePath))
-          r = requests.get(pdfLink)
-          if r.status_code != 200:
-            print("HTTP status {}".format(r.status_code))
-            continue
-          with open(filePath, "wb") as fp:
-            fp.write(r.content)
+        for invoice in cancelled_invoices:
+            if invoice.post_payment_credit_notes_amount > 0:
+                for cn in stripe.CreditNote.list(invoice=invoice.id).data:
+                    cn_date = datetime.fromtimestamp(cn.created, timezone.utc).astimezone(stripe_datev.config.accounting_tz)
+                    fileName = "{} {}_credit_note.pdf".format(cn_date.strftime("%Y-%m-%d"), cn.number or cn.id)
+                    filePath = os.path.join(pdfDir, fileName)
+                    if os.path.exists(filePath):
+                        continue
+                    print("Downloading credit note {} to {}".format(cn.pdf, filePath))
+                    r = requests.get(cn.pdf)
+                    if r.status_code != 200:
+                        print("HTTP status {}".format(r.status_code))
+                        continue
+                    with open(filePath, "wb") as fp:
+                        fp.write(r.content)
 
-        for charge in charges:
-          fileName = "{} {}.html".format(datetime.fromtimestamp(charge.created, timezone.utc).strftime("%Y-%m-%d"), charge.receipt_number or charge.id)
-          filePath = os.path.join(pdfDir, fileName)
-          if os.path.exists(filePath):
-            # print("{} exists, skipping".format(filePath))
-            continue
-
-          pdfLink = charge["receipt_url"]
-          print("Downloading {} to {}".format(pdfLink, filePath))
-          r = requests.get(pdfLink)
-          if r.status_code != 200:
-            print("HTTP status {}".format(r.status_code))
-            continue
-          with open(filePath, "wb") as fp:
-            fp.write(r.content)
+        # Save timestamp so --since last works on the next run
+        with open(last_download_file, 'w') as f:
+            f.write(now.isoformat())
 
     def validate_customers(self, argv):
       stripe_datev.customer.validate_customers()
